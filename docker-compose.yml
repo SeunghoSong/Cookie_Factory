@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  # ============================================================================
+  # [C1: Gateway] 스트리밍 수신 및 최종 검출 결과 표출 라우팅
+  # ============================================================================
+  c1-gateway:
+    build: ./c1_gateway
+    container_name: c1_gateway
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PREPROCESSOR_URL=http://c2-preprocessor:5001/preprocess
+    networks:
+      - snack-pipeline-net
+
+  # ============================================================================
+  # [C2: Preprocessing] 영상 프레임 전처리 및 분석 데이터 최적화 가공
+  # ============================================================================
+  c2-preprocessor:
+    build: ./c2_preprocessor
+    container_name: c2_preprocessor
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    environment:
+      - INFERENCE_URL=http://c3-inference:5002/infer
+    networks:
+      - snack-pipeline-net
+
+  # ============================================================================
+  # [C3: SAM 2 Inference] 핵심 코어: SAM 2 마스크 추출 및 원형도 분석 기반 불량 판정
+  # ============================================================================
+  c3-inference:
+    build: ./c3_inference_core
+    container_name: c3_inference_core
+    restart: unless-stopped
+    ports:
+      - "5002:5002"
+    environment:
+      - VISUALIZER_URL=http://c4-visualizer:5003/visualize
+    networks:
+      - snack-pipeline-net
+
+  # ============================================================================
+  # [C4: Visualizer] 불량 과자 영역 BBox/마스크 렌더링 및 C1 역전송
+  # ============================================================================
+  c4-visualizer:
+    build: ./c4_visualizer
+    container_name: c4_visualizer
+    restart: unless-stopped
+    ports:
+      - "5003:5003"
+    environment:
+      - GATEWAY_URL=http://c1-gateway:8000/stream-result
+    volumes:
+      - ./data/output_json:/app/output_json
+      - ./data/captures:/app/captures
+    networks:
+      - snack-pipeline-net
+
+networks:
+  snack-pipeline-net:
+    driver: bridge
