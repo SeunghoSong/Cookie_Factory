@@ -47,10 +47,10 @@
 
 ### C1 → C2 (`POST`, `PREPROCESSOR_URL`)
 
-프레임을 그대로 릴레이:
+C2의 실제 `FrameInput` 스키마(`image`, `ts` 필수)에 맞춰 필드명을 변환해서 전달 (`timestamp` → `ts`). `frame_id`도 함께 보내며, C2/C3를 거쳐 C4까지 그대로 전달됨(2026-08-25 통합 테스트로 종단 간 확인):
 
 ```json
-{ "frame_id": "...", "timestamp": 1732500000000, "image": "<Base64 JPEG>" }
+{ "image": "<Base64 JPEG>", "ts": 1732500000000, "frame_id": "1732500000000-42" }
 ```
 
 ### C4 → C1 (`POST /stream-result`)

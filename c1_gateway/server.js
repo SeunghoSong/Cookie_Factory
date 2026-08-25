@@ -22,12 +22,18 @@ const dashboardClients = new Set();
 let cameraConnected = false;
 
 // ---- C2 Preprocessor로 프레임을 릴레이 (HTTP POST) ----
+// C2의 FrameInput 스키마는 { image, ts, socketId? } 형태(ts 필수)이므로 그에 맞춰 전송.
+// frame_id는 C2가 사용하진 않지만 향후 추적용으로 함께 보냄(Pydantic이 알 수 없는 필드는 무시함).
 async function relayFrameToC2(frame) {
   try {
     const res = await fetch(PREPROCESSOR_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(frame),
+      body: JSON.stringify({
+        image: frame.image,
+        ts: frame.timestamp,
+        frame_id: frame.frame_id,
+      }),
     });
     return res.ok;
   } catch (err) {

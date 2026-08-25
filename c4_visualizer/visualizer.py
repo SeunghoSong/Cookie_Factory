@@ -52,7 +52,9 @@ def draw_object(img: np.ndarray, obj: dict) -> None:
 
     bbox = obj.get("bbox")
     if bbox and len(bbox) == 4:
-        x1, y1, x2, y2 = [int(v) for v in bbox]
+        # C2/C3가 cv2.boundingRect() 기준 [x, y, width, height]로 전달함 (xyxy 아님)
+        x, y, w, h = [int(v) for v in bbox]
+        x1, y1, x2, y2 = x, y, x + w, y + h
         cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
 
         roundness = obj.get("roundness")
@@ -87,7 +89,8 @@ async def visualize(payload: dict):
         frame_id = f"c4-{uuid.uuid4().hex[:12]}"
         print(f"[C4] WARNING: payload missing frame_id, generated fallback {frame_id}")
 
-    timestamp = payload.get("timestamp", int(time.time() * 1000))
+    # C2/C3는 timestamp를 ts라는 키로 전달함
+    timestamp = payload.get("ts", payload.get("timestamp", int(time.time() * 1000)))
     objects = payload.get("objects", [])
 
     img = decode_image(payload["image"])
