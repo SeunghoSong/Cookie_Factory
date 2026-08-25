@@ -6,6 +6,8 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "ws": "^8.17.0",
+    "qrcode": "^1.5.3"
   }
 }

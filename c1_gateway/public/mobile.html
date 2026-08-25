@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>주머니 속의 스마트 팩토리</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; background: #0a0a0a; color: #f5f5f5;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; align-items: center; padding: 12px;
+  }
+  h1 { font-size: 16px; opacity: 0.7; margin: 8px 0; }
+  .frame {
+    position: relative; width: 100%; max-width: 480px;
+    aspect-ratio: 4 / 3; background: #000; border-radius: 12px; overflow: hidden;
+    border: 2px solid #333;
+  }
+  video, #resultImg {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+  }
+  #resultImg { position: absolute; inset: 0; display: none; }
+  .badge {
+    position: absolute; top: 10px; left: 10px; padding: 4px 10px;
+    border-radius: 6px; font-size: 12px; font-weight: 700; letter-spacing: 0.5px;
+    background: rgba(0,0,0,0.6);
+  }
+  .badge.live { color: #4ade80; }
+  .badge.nosig { color: #f87171; }
+  .nosig-overlay {
+    position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    background: repeating-linear-gradient(45deg, #111 0 10px, #1a1a1a 10px 20px);
+    color: #f87171; font-size: 22px; font-weight: 800; letter-spacing: 2px;
+  }
+  .nosig-overlay.show { display: flex; }
+  .status-line { margin-top: 10px; font-size: 14px; opacity: 0.85; min-height: 20px; }
+  .result-pass { color: #4ade80; font-weight: 700; }
+  .result-fail { color: #f87171; font-weight: 700; }
+</style>
+</head>
+<body>
+  <h1>🍪 실시간 불량 과자 검출</h1>
+  <div class="frame">
+    <video id="video" autoplay playsinline muted></video>
+    <img id="resultImg" alt="판정 결과" />
+    <div class="badge live" id="badge">CONNECTING…</div>
+    <div class="nosig-overlay" id="nosig">NO SIGNAL</div>
+  </div>
+  <canvas id="canvas" style="display:none;"></canvas>
+  <div class="status-line" id="statusLine">카메라 권한을 확인하는 중입니다...</div>
+
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const resultImg = document.getElementById('resultImg');
+const badge = document.getElementById('badge');
+const nosig = document.getElementById('nosig');
+const statusLine = document.getElementById('statusLine');
+
+const FRAME_INTERVAL_MS = 300; // 데모용 전송 주기 (~3fps)
+const JPEG_QUALITY = 0.6;
+
+let ws = null;
+let frameCounter = 0;
+
+function setBadge(text, mode) {
+  badge.textContent = text;
+  badge.className = 'badge ' + mode;
+}
+
+function showNoSignal(reason) {
+  nosig.classList.add('show');
+  video.style.display = 'none';
+  resultImg.style.display = 'none';
+  setBadge('NO SIG', 'nosig');
+  statusLine.textContent = reason || '연결이 끊어졌습니다.';
+}
+
+function hideNoSignal() {
+  nosig.classList.remove('show');
+  video.style.display = 'block';
+}
+
+function connectWebSocket() {
+  const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${protocol}://${location.host}/ws/stream`);
+
+  ws.onopen = () => {
+    setBadge('LIVE', 'live');
+    statusLine.textContent = '스트리밍 중입니다.';
+    hideNoSignal();
+  };
+
+  ws.onclose = () => {
+    showNoSignal('서버 연결이 끊어졌습니다. 재연결 시도 중...');
+    setTimeout(connectWebSocket, 2000);
+  };
+
+  ws.onerror = () => {
+    ws.close();
+  };
+
+  ws.onmessage = (event) => {
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+
+    if (msg.type === 'result') {
+      resultImg.src = `data:image/jpeg;base64,${msg.image}`;
+      resultImg.style.display = 'block';
+      video.style.display = 'none';
+
+      if (msg.status === 'NO_OBJECT') {
+        statusLine.textContent = '검출 대상 없음';
+      } else if (msg.is_defective) {
+        statusLine.innerHTML = `<span class="result-fail">불량 (FAIL)</span> · 원형도 ${Number(msg.circularity).toFixed(2)}`;
+      } else {
+        statusLine.innerHTML = `<span class="result-pass">정상 (PASS)</span> · 원형도 ${Number(msg.circularity).toFixed(2)}`;
+      }
+
+      setTimeout(() => {
+        resultImg.style.display = 'none';
+        video.style.display = 'block';
+      }, 1200);
+    } else if (msg.type === 'status') {
+      statusLine.textContent = msg.message;
+    }
+  };
+}
+
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false,
+    });
+    video.srcObject = stream;
+
+    const [track] = stream.getVideoTracks();
+    track.addEventListener('ended', () => showNoSignal('카메라 연결이 종료되었습니다.'));
+
+    video.addEventListener('loadedmetadata', () => {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      startSendingFrames();
+    });
+  } catch (err) {
+    showNoSignal('카메라 권한이 거부되었거나 사용할 수 없습니다.');
+  }
+}
+
+function startSendingFrames() {
+  const ctx = canvas.getContext('2d');
+  setInterval(() => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (video.readyState < 2) return;
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
+    const base64 = dataUrl.split(',')[1];
+
+    frameCounter += 1;
+    ws.send(JSON.stringify({
+      type: 'frame',
+      frame_id: `${Date.now()}-${frameCounter}`,
+      timestamp: Date.now(),
+      image: base64,
+    }));
+  }, FRAME_INTERVAL_MS);
+}
+
+connectWebSocket();
+startCamera();
+</script>
+</body>
+</html>
