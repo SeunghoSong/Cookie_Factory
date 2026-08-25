@@ -17,65 +17,43 @@
 
 ---
 
-## 2. 🔌 통신 인터페이스 규격 (I/O Specification)
+## 2. 🔌 파이프라인 입출력 (I/O) 요약
 
-### 📥 1단계: C1 Gateway ➡️ C2 Preprocessor (INPUT)
-* **엔드포인트**: `POST http://c2-preprocessor:5001/preprocess`
-* **요청 데이터 (JSON)**:
+본 비전 코어(C2, C3)는 철저하게 분리된 마이크로서비스로 동작합니다.
+- **INPUT (C1 ➡️ C2)**: 스마트폰이 캡처한 Base64 이미지 수신 (`POST /preprocess`)
+- **OUTPUT (C3 ➡️ C4)**: 시각화 담당자에게 최종 분석 좌표 및 판정 결과 전달 (`POST /visualize`)
 ```json
 {
-  "image": "data:image/jpeg;base64,...",
-  "ts": 1787620000000,
-  "socketId": "sock_abc123"
-}
-```
-
-### 🔄 2단계: C2 Preprocessor ➡️ C3 Inference Core (INTERNAL)
-* **엔드포인트**: `POST http://c3-inference:5002/infer`
-* **전달 데이터 (JSON)**:
-```json
-{
-  "image": "data:image/jpeg;base64,...",
-  "candidates": [
-    {
-      "bbox": [120, 85, 80, 80],
-      "lane": "LINE 03",
-      "area": 4820.5,
-      "contour": [[120, 85], [125, 90], ...]
-    }
-  ],
-  "ts": 1787620000000,
-  "prep_latency_ms": 12.4
-}
-```
-
-### 📤 3단계: C3 Inference Core ➡️ C4 Visualizer (OUTPUT)
-* **엔드포인트**: `POST http://c4-visualizer:5003/visualize`
-* **출력 데이터 (JSON)**:
-```json
-{
-  "image": "data:image/jpeg;base64,...",
+  "total_obj": 3, "ng_count": 1,
   "objects": [
     {
+      "lane": "LINE 02",
       "bbox": [120, 85, 80, 80],
-      "lane": "LINE 03",
-      "status": "NG",
-      "roundness": 0.60,
-      "defect_type": "WEDGE",
-      "contour": [[120, 85], [125, 90], ...]
+      "contour": [[120, 85], [125, 90]],
+      "status": "NG", "defect_type": "WEDGE", "roundness": 0.55
     }
-  ],
-  "total_obj": 4,
-  "ng_count": 1,
-  "ts": 1787620000000,
-  "prep_latency_ms": 12.4,
-  "infer_latency_ms": 18.2
+  ]
 }
 ```
 
 ---
 
-## 3. 📐 4대 불량 판정 수학적 알고리즘 ($c = r_{min} / r_{max}$)
+## 3. 🧠 [C2] 비전 전처리 6단계 파이프라인 (노이즈 컷팅 엔진)
+
+배경 노이즈(먼지, 그림자, 모니터 픽셀, 사람의 손 등)를 완벽하게 차단하고 순수한 "과자" 객체만 추출하기 위해 **6중 필터링 아키텍처**를 독자적으로 구축했습니다.
+
+1. **가우시안 블러 (Gaussian Blur)**: 스마트폰으로 모니터를 촬영할 때 발생하는 픽셀 격자(모아레) 현상 및 정지 화면의 빛 반사 노이즈를 부드럽게 뭉개어 마스크 찢어짐을 방지합니다.
+2. **조명 대비 극대화 (CLAHE)**: V(명도) 채널에 국부적 히스토그램 평활화(CLAHE)를 적용하여, 그림자가 진 어두운 환경에서도 쿠키의 윤곽선을 뚜렷하게 복원합니다.
+3. **HSV 색상 적응형 마스킹 (Color Filter)**: 쿠키 고유의 황토색(Hue 8~38) 스펙트럼만 추출하고, 컨베이어 벨트 배경색은 100% 차단(Black-out)합니다.
+4. **모폴로지 닫힘 (Morphology Close)**: 쿠키 내부에 박힌 초코칩(검은색)으로 인해 발생하는 마스크 구멍(Hole)을 수학적 팽창/침식 연산으로 꽉 채워 솔리드(Solid) 덩어리로 변환합니다.
+5. **형태학적 이중 방어막 (Area & Ratio Cut)**:
+   - **면적 제한 ($1,000 \sim 40,000$)**: 거대한 사람의 피부 톤이나 미세한 먼지 노이즈를 1차로 걸러냅니다.
+   - **종횡비 제한 ($0.4 \sim 2.5$)**: 컨베이어의 노란색 선이나 화면 글씨 등 길쭉한 선형 구조물을 2차로 완벽하게 컷팅합니다.
+6. **3라인 (LINE 01~03) 자동 슬라이싱**: 검증된 객체들의 Y좌표를 분석하여 컨베이어의 어느 레일(1, 2, 3) 위를 지나고 있는지 동적으로 라벨링합니다.
+
+---
+
+## 4. 📐 [C3] 4대 불량 판정 수학적 알고리즘 ($c = r_{min} / r_{max}$)
 
 과자의 외곽선 좌표 집합 $P = \{(x_i, y_i)\}_{i=1}^N$ 과 중심점 $(\bar{x}, \bar{y})$ 사이의 거리 분포를 분석합니다:
 $$r_i = \sqrt{(x_i - \bar{x})^2 + (y_i - \bar{y})^2}$$
