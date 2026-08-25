@@ -7,8 +7,7 @@ const QRCode = require('qrcode');
 const PORT = process.env.PORT || 8000;
 // ngrok 등으로 외부에 노출된 주소. 미설정 시 로컬 접속 주소로 대체.
 const PUBLIC_URL = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
-const PREPROCESSOR_WS_URL = process.env.PREPROCESSOR_WS_URL || 'ws://c2-preprocessor:5001/ws/preprocess';
-const C2_RECONNECT_DELAY_MS = 3000;
+const PREPROCESSOR_URL = process.env.PREPROCESSOR_URL || 'http://c2-preprocessor:5001/preprocess';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -16,51 +15,43 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const server = http.createServer(app);
 
-// ---- 모바일 클라이언트(카메라 송출/결과 수신) 연결 목록 ----
+// ---- 모바일 클라이언트(카메라 송출 전용) 연결 목록 ----
 const mobileClients = new Set();
+// ---- 대시보드 클라이언트(마킹 결과 확인 전용) 연결 목록 ----
+const dashboardClients = new Set();
+let cameraConnected = false;
 
-// ---- C2 Preprocessor로 프레임을 릴레이하는 아웃바운드 WebSocket ----
-let c2Socket = null;
-let c2Connected = false;
-
-function connectToC2() {
-  const socket = new WebSocket(PREPROCESSOR_WS_URL);
-
-  socket.on('open', () => {
-    c2Connected = true;
-    console.log(`[C1] Connected to C2 preprocessor (${PREPROCESSOR_WS_URL})`);
-  });
-
-  socket.on('close', () => {
-    c2Connected = false;
-    console.warn('[C1] C2 connection closed. Retrying in 3s...');
-    setTimeout(connectToC2, C2_RECONNECT_DELAY_MS);
-  });
-
-  socket.on('error', (err) => {
-    console.error(`[C1] C2 connection error: ${err.message}`);
-  });
-
-  c2Socket = socket;
-}
-connectToC2();
-
-function relayFrameToC2(frame) {
-  if (!c2Connected || !c2Socket || c2Socket.readyState !== WebSocket.OPEN) {
+// ---- C2 Preprocessor로 프레임을 릴레이 (HTTP POST) ----
+async function relayFrameToC2(frame) {
+  try {
+    const res = await fetch(PREPROCESSOR_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(frame),
+    });
+    return res.ok;
+  } catch (err) {
+    console.error(`[C1] Failed to relay frame to C2: ${err.message}`);
     return false;
   }
-  c2Socket.send(JSON.stringify(frame));
-  return true;
 }
 
-// ---- 모바일 클라이언트용 WebSocket 서버 (프레임 수신 / 결과 송신) ----
-const wss = new WebSocket.Server({ server, path: '/ws/stream' });
+// ---- 모바일 클라이언트용 WebSocket 서버 (카메라 프레임 업로드 전용) ----
+// 두 개의 WebSocket.Server를 { server, path } 옵션으로 동시에 붙이면 ws 라이브러리가
+// 서로의 upgrade 요청을 가로채 400으로 끊어버리는 충돌이 있어, noServer + 수동 라우팅 방식 사용.
+const wss = new WebSocket.Server({ noServer: true });
+
+function setCameraConnected(connected) {
+  cameraConnected = connected;
+  broadcastToDashboards({ type: 'camera_status', connected });
+}
 
 wss.on('connection', (ws) => {
   mobileClients.add(ws);
   console.log(`[C1] Mobile client connected (${mobileClients.size} active)`);
+  setCameraConnected(true);
 
-  ws.on('message', (raw) => {
+  ws.on('message', async (raw) => {
     let frame;
     try {
       frame = JSON.parse(raw);
@@ -69,7 +60,7 @@ wss.on('connection', (ws) => {
     }
     if (frame.type !== 'frame') return;
 
-    const relayed = relayFrameToC2({
+    const relayed = await relayFrameToC2({
       frame_id: frame.frame_id,
       timestamp: frame.timestamp,
       image: frame.image,
@@ -83,6 +74,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     mobileClients.delete(ws);
     console.log(`[C1] Mobile client disconnected (${mobileClients.size} active)`);
+    if (mobileClients.size === 0) setCameraConnected(false);
   });
 
   ws.on('error', (err) => {
@@ -90,13 +82,35 @@ wss.on('connection', (ws) => {
   });
 });
 
-function broadcastResult(result) {
-  const payload = JSON.stringify({ type: 'result', ...result });
-  for (const client of mobileClients) {
+// ---- 대시보드 클라이언트용 WebSocket 서버 (마킹 결과 확인 전용) ----
+const wssDashboard = new WebSocket.Server({ noServer: true });
+
+wssDashboard.on('connection', (ws) => {
+  dashboardClients.add(ws);
+  console.log(`[C1] Dashboard client connected (${dashboardClients.size} active)`);
+  ws.send(JSON.stringify({ type: 'camera_status', connected: cameraConnected }));
+
+  ws.on('close', () => {
+    dashboardClients.delete(ws);
+    console.log(`[C1] Dashboard client disconnected (${dashboardClients.size} active)`);
+  });
+
+  ws.on('error', (err) => {
+    console.error(`[C1] Dashboard socket error: ${err.message}`);
+  });
+});
+
+function broadcastToDashboards(payload) {
+  const message = JSON.stringify(payload);
+  for (const client of dashboardClients) {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(payload);
+      client.send(message);
     }
   }
+}
+
+function broadcastResult(result) {
+  broadcastToDashboards({ type: 'result', ...result });
 }
 
 // ---- C4 Visualizer로부터 판정/마킹 결과 수신 (§2 인터페이스 4) ----
@@ -130,8 +144,29 @@ app.get('/mobile', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'mobile.html'));
 });
 
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
+});
+
 app.get('/', (req, res) => {
-  res.send('<h1>[C1 Gateway] Ready for Stream Routing</h1><p><a href="/qr">QR 코드 보기</a></p>');
+  res.send(`
+    <h1>[C1 Gateway] Ready for Stream Routing</h1>
+    <p><a href="/qr">📱 QR 코드 보기 (카메라 접속)</a></p>
+    <p><a href="/dashboard">🖥️ 대시보드 (마킹 결과 확인)</a></p>
+  `);
+});
+
+// ---- 경로별 WebSocket upgrade 수동 라우팅 ----
+server.on('upgrade', (req, socket, head) => {
+  const { pathname } = new URL(req.url, `http://${req.headers.host}`);
+
+  if (pathname === '/ws/stream') {
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+  } else if (pathname === '/ws/dashboard') {
+    wssDashboard.handleUpgrade(req, socket, head, (ws) => wssDashboard.emit('connection', ws, req));
+  } else {
+    socket.destroy();
+  }
 });
 
 server.listen(PORT, () => {

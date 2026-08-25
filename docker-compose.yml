@@ -11,7 +11,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - PREPROCESSOR_WS_URL=ws://c2-preprocessor:5001/ws/preprocess
+      - PREPROCESSOR_URL=http://c2-preprocessor:5001/preprocess
       # ngrok 등으로 외부 노출 시 발급받은 HTTPS 주소로 덮어쓸 것 (QR 코드 생성에 사용)
       - PUBLIC_URL=http://localhost:8000
     networks:
