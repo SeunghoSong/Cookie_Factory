@@ -1,6 +1,22 @@
 version: '3.8'
 
 services:
+  c1-gateway:
+    build: ./c1_gateway
+    container_name: c1_gateway
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PREPROCESSOR_URL=http://c2-preprocessor:5001/preprocess
+    volumes:
+      - ./c1_gateway:/app
+      - /app/node_modules
+    networks:
+      - snack-pipeline-net
+    depends_on:
+      - c2-preprocessor
+
   c2-preprocessor:
     build: ./c2_preprocessor
     container_name: c2_preprocessor
@@ -23,9 +39,24 @@ services:
     ports:
       - "5002:5002"
     environment:
-      - VISUALIZER_URL=http://host.docker.internal:5003/visualize
+      - VISUALIZER_URL=http://c4-visualizer:5003/visualize
     volumes:
       - ./c3_inference_core:/app
+    networks:
+      - snack-pipeline-net
+    depends_on:
+      - c4-visualizer
+
+  c4-visualizer:
+    build: ./c4_visualizer
+    container_name: c4_visualizer
+    restart: unless-stopped
+    ports:
+      - "5003:5003"
+    environment:
+      - GATEWAY_URL=http://c1-gateway:8000/stream-result
+    volumes:
+      - ./c4_visualizer:/app
     networks:
       - snack-pipeline-net
 

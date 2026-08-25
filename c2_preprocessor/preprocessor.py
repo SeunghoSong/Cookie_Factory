@@ -59,6 +59,11 @@ def extract_cookie_candidates(frame):
             x, y, bw, bh = cv2.boundingRect(cnt)
             
             # 2. 종횡비(Aspect Ratio) 필터링: 선이나 길쭉한 형태 제외 (쿠키는 둥근 형태)
+            # 2. Border Rejection (경계선 무시): 화면 테두리에 걸친 과자 무시
+            margin = 10
+            if x < margin or y < margin or (x + bw) > w - margin or (y + bh) > h - margin:
+                continue
+
             aspect_ratio = float(bw) / bh
             if 0.25 <= aspect_ratio <= 4.0:
                 # 3개 라인 판정 (Y좌표 기준)
