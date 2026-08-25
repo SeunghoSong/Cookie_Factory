@@ -55,12 +55,12 @@ def extract_cookie_candidates(frame):
     for cnt in contours:
         area = cv2.contourArea(cnt)
         # 1. 면적 필터링: 너무 작은 노이즈나 거대한 피부/화면 영역 제외 (1000 ~ 40000 픽셀)
-        if 1000 < area < 40000:
+        if 500 < area < 40000:
             x, y, bw, bh = cv2.boundingRect(cnt)
             
             # 2. 종횡비(Aspect Ratio) 필터링: 선이나 길쭉한 형태 제외 (쿠키는 둥근 형태)
             aspect_ratio = float(bw) / bh
-            if 0.4 <= aspect_ratio <= 2.5:
+            if 0.25 <= aspect_ratio <= 4.0:
                 # 3개 라인 판정 (Y좌표 기준)
                 lane_idx = int(y / (h / 3.0)) + 1
                 lane_name = f"LINE {min(3, max(1, lane_idx)):02d}"

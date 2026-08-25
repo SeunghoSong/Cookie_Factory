@@ -59,8 +59,8 @@ def analyze_defect_shape(contour_list, bbox):
     roundness = round(float(roundness), 2)
 
     # 불량 판정 임계값: c < 0.75 이면 불량(NG)
-    if roundness < 0.75:
-        if roundness < 0.40:
+    if roundness < 0.73:
+        if roundness < 0.50:
             defect_type = "HALF"      # 반쪽 파손
         elif roundness < 0.55:
             defect_type = "WEDGE"     # 조각 결손
